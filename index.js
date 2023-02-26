@@ -117,8 +117,73 @@ app.get("/api/get-user", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    const stockDetails = await UserModel.aggregate([
+      { $match: { email: email } }, // Match user's email
+      { $unwind: "$stock.items" }, // Unwind the stock array
+      {
+        $lookup: {
+          from: "stocks", // Specify the name of the stock collection
+          localField: "stock.items.stockId",
+          foreignField: "_id",
+          as: "stockDetails",
+        },
+      },
+      { $unwind: "$stockDetails" },
+      // {
+      //   $group: {
+      //     _id: "$stockDetails.company",
+      //     stocks: {
+      //       $push: {
+      //         stockId: "$stock.items.stockId",
+      //         DOP: "$stockDetails.DOP",
+      //         VOP: "$stockDetails.VOP",
+      //         stockVolume: "$stock.items.stockVolume",
+      //       },
+      //     },
+      //   },
+      // },
+      // {
+      //   $project: {
+      //     _id: 0,
+      //     company: "$_id",
+      //     DOP: "$stockDetails.DOP",
+      //     VOP: "$stockDetails.VOP",
+      //     stockVolume: "$stock.items.stockVolume",
+      //     stocks: 1,
+      //   },
+      // },
+      // Unwind the stockDetails array
+      {
+        $project: {
+          _id: 0,
+          stockId: "$stock.items.stockId",
+          company: "$stockDetails.company",
+          DOP: "$stockDetails.DOP",
+          VOP: "$stockDetails.VOP",
+          stockVolume: "$stockDetails.stockVolume",
+        },
+      },
+    ]);
+    const options = {
+      method: "GET",
+      headers: {
+        "X-RapidAPI-Key": "080d5391a5msh8465fd7b03a93c4p1725e9jsnb512929f94b5",
+        "X-RapidAPI-Host": "yahoo-finance15.p.rapidapi.com",
+      },
+    };
+
+    fetch(
+      `https://yahoo-finance15.p.rapidapi.com/api/yahoo/qu/quote/${stockDetails.company}/financial-data`,
+      options
+    )
+      .then((response) => response.json())
+      .then((response) => console.log(response))
+      .catch((err) => console.error(err));
     // return success response
-    return res.status(200).json({ user: user });
+    console.log(stockDetails);
+    console.log(typeof stockDetails.details);
+    console.log(stockDetails.details);
+    return res.status(200).json({ user: user, stocks: stockDetails });
   } catch (error) {
     console.log(error);
 
