@@ -9,9 +9,14 @@
 	"dependencies": {
 		"bcryptjs": "^2.4.3",
 		"cors": "^2.8.5",
+		"dotenv": "^16.0.3",
 		"express": "^4.17.1",
+		"joi": "^17.8.3",
+		"joi-password-complexity": "^5.1.0",
 		"jsonwebtoken": "^8.5.1",
 		"mongoose": "^5.13.7",
-		"nodemon": "^2.0.12"
+		"nodemailer": "^6.9.1",
+		"nodemon": "^2.0.12",
+		"request": "^2.88.2"
 	}
 }

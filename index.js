@@ -1,51 +1,124 @@
 const express = require("express");
 const app = express();
+const router = express.Router();
 const cors = require("cors");
 const mongoose = require("mongoose");
 const UserModel = require("./models/user.model");
 const StockModel = require("./models/stock");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const request = require("request");
+const sendEmail = require("./models/email");
+const Token = require("./models/token");
+// const passwordResetRoutes = require("./passwordreset");
+
+const Joi = require("Joi");
+const passwordComplexity = require("joi-password-complexity");
+require("dotenv").config();
 
 app.use(cors());
 app.use(express.json());
 
-mongoose.connect(
-  "mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+1.6.2",
-  { useNewUrlParser: true, useUnifiedTopology: true }
-);
+mongoose.connect("mongodb://127.0.0.1:27017/mydatabase", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+// app.use("/api/password-reset", passwordResetRoutes);
+
+//register........................................................................................
 
 app.post("/api/register", async (req, res) => {
   console.log(req.body);
   try {
     const newPassword = await bcrypt.hash(req.body.password, 10);
-    await UserModel.create({
+    const user = await UserModel.create({
       name: req.body.name,
       email: req.body.email,
       password: newPassword,
+      isVerified: false,
     });
-    res.json({ status: "ok" });
+    const token = await new Token({
+      userId: user._id,
+      token: crypto.randomBytes(32).toString("hex"),
+    }).save();
+
+    const message = `${process.env.BASE_URL}/verify/${user.id}/${token.token}`;
+    await sendEmail(user.email, "Verify Email", message);
+
+    res.json(
+      "An email has been sent to your account. Please verify your email address."
+    );
   } catch (err) {
-    res.json({ status: "error", error: "Duplicate email" });
+    res.status(400).json("An error occurred while registering.");
+  }
+});
+//register end...................................................................................................................
+
+//verify email begin..................................................................................................................
+
+app.get("/verify/:id/:token", async (req, res) => {
+  try {
+    const user = await UserModel.findOne({ _id: req.params.id });
+    if (!user) return res.status(400).send("Invalid link");
+
+    const token = await Token.findOne({
+      userId: user._id,
+      token: req.params.token,
+    });
+    if (!token) return res.status(400).json("Invalid link");
+
+    await UserModel.updateOne({ isVerified: true });
+    await Token.findByIdAndRemove(token._id);
+
+    res.json("Email verified successfully");
+  } catch (error) {
+    res.status(400).json("An error occurred while verifying email.");
   }
 });
 
+//verify email end.......................................................................................................................
+
+//login begin......................................................................................................................
 app.post("/api/login", async (req, res) => {
-  const token = req.headers["x-access-token"];
-  const user = await UserModel.findOne({
-    email: req.body.email,
-  });
+  try {
+    const user = await UserModel.findOne({ email: req.body.email });
 
-  if (!user) {
-    return { status: "error", error: "Invalid login" };
-  }
+    if (!user) {
+      return res.json({ status: "error", error: "Invalid login" });
+    }
 
-  const isPasswordValid = await bcrypt.compare(
-    req.body.password,
-    user.password
-  );
+    const isPasswordValid = await bcrypt.compare(
+      req.body.password,
+      user.password
+    );
 
-  if (isPasswordValid) {
+    if (!isPasswordValid) {
+      return res.json({
+        status: "error",
+        error: "Password is incorrect",
+        user: false,
+      });
+    }
+    if (user.isVerified == false) {
+      console.log("not verified");
+    }
+    // if (!user.isVerified) {
+    //   let token = await Token.findOne({ userId: user._id });
+    //   if (!token) {
+    //     token = await new Token({
+    //       userId: user._id,
+    //       token: crypto.randomBytes(32).toString("hex"),
+    //     }).save();
+    //     const url = `${process.env.BASE_URL}users/${user._id}/verify/${token.token}`;
+    //     await sendEmail(user.email, "Verify Email", url);
+    //   }
+
+    //   return res
+    //     .status(400)
+    //     .send({ message: "An Email sent to your account please verify" });
+    // }
     const token = jwt.sign(
       {
         name: user.name,
@@ -55,10 +128,99 @@ app.post("/api/login", async (req, res) => {
     );
 
     return res.json({ status: "ok", user: token });
-  } else {
-    return res.json({ status: "error", user: false });
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
   }
 });
+//login end.......................................................................................................................
+
+//password reset begin....................................................................................................
+
+app.post("/api/password-reset", async (req, res) => {
+  try {
+    const emailSchema = Joi.object({
+      email: Joi.string().email().required().label("Email"),
+    });
+    let user = await UserModel.findOne({ email: req.body.email });
+    if (!user)
+      return res
+        .status(409)
+        .send({ message: "User with given email does not exist!" });
+
+    let token = await Token.findOne({ userId: user._id });
+    if (!token) {
+      token = await new Token({
+        userId: user._id,
+        token: crypto.randomBytes(32).toString("hex"),
+      }).save();
+    }
+
+    const url = `${process.env.BASE_URL}/password-reset/${user._id}/${token.token}/`;
+    await sendEmail(user.email, "Password Reset", url);
+
+    res
+      .status(200)
+      .send({ message: "Password reset link sent to your email account" });
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+// verify password reset link
+app.get("/password-reset/:id/:token", async (req, res) => {
+  try {
+    const user = await UserModel.findOne({ _id: req.params.id });
+    if (!user) return res.status(400).send({ message: "Invalid link" });
+
+    const token = await Token.findOne({
+      userId: user._id,
+      token: req.params.token,
+    });
+    if (!token) return res.status(400).send({ message: "Invalid link" });
+
+    res.status(200).send("Valid Url");
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+//  set new password
+app.post("/password-reset/:id/:token", async (req, res) => {
+  try {
+    const passwordSchema = Joi.object({
+      password: passwordComplexity().required().label("Password"),
+    });
+    const { error } = passwordSchema.validate(req.body);
+    if (error)
+      return res.status(400).send({ message: error.details[0].message });
+
+    const user = await UserModel.findOne({ _id: req.params.id });
+    if (!user) return res.status(400).send({ message: "Invalid link" });
+
+    const token = await Token.findOne({
+      userId: user._id,
+      token: req.params.token,
+    });
+    if (!token) return res.status(400).send({ message: "Invalid link" });
+
+    if (!user.verified) user.verified = true;
+
+    const salt = await bcrypt.genSalt(Number(process.env.SALT));
+    const hashPassword = await bcrypt.hash(req.body.password, salt);
+
+    user.password = hashPassword;
+    await user.save();
+    await token.remove();
+
+    res.status(200).send({ message: "Password reset successfully" });
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+//password reset end...................................................................................................................................
+
+//add stock to portfolio begin...............................................................................................................
 
 app.post("/api/add-stock", async (req, res) => {
   const token = req.headers["x-access-token"];
@@ -99,6 +261,10 @@ app.post("/api/add-stock", async (req, res) => {
   }
 });
 
+//add stock end......................................................................................................................
+
+//get user data  begin..............................................................................................................
+
 app.get("/api/get-user", async (req, res) => {
   const token = req.headers["x-access-token"];
 
@@ -129,30 +295,7 @@ app.get("/api/get-user", async (req, res) => {
         },
       },
       { $unwind: "$stockDetails" },
-      // {
-      //   $group: {
-      //     _id: "$stockDetails.company",
-      //     stocks: {
-      //       $push: {
-      //         stockId: "$stock.items.stockId",
-      //         DOP: "$stockDetails.DOP",
-      //         VOP: "$stockDetails.VOP",
-      //         stockVolume: "$stock.items.stockVolume",
-      //       },
-      //     },
-      //   },
-      // },
-      // {
-      //   $project: {
-      //     _id: 0,
-      //     company: "$_id",
-      //     DOP: "$stockDetails.DOP",
-      //     VOP: "$stockDetails.VOP",
-      //     stockVolume: "$stock.items.stockVolume",
-      //     stocks: 1,
-      //   },
-      // },
-      // Unwind the stockDetails array
+
       {
         $project: {
           _id: 0,
@@ -190,6 +333,31 @@ app.get("/api/get-user", async (req, res) => {
     res.json(error);
   }
 });
+//get user data end................................................................................................................
+
+//delete stock from portfolio begin...................................................................................................
+
+app.post("/api/delete", async (req, res) => {
+  console.log("hiii");
+  try {
+    console.log("hiii");
+    console.log(req.body);
+    const { id } = req.body;
+
+    const deletedStock = await StockModel.findById({ _id: id });
+    if (!deletedStock) {
+      return res.status(400).json({ msg: "No such Stock" });
+    }
+
+    await deletedStock.remove();
+    return res.json({ msg: "User deleted successfully" });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ msg: "Server error" });
+  }
+});
+
+//delete stock from portfolio end.............................................................................................
 
 //server starting codeeee......................................................................
 
